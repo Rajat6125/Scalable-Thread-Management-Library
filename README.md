@@ -1,5 +1,17 @@
 # CPU Scheduler with Real-Time Process Monitor
-Real-Time CPU Scheduler & Process Monitor is an interactive desktop application that bridges the gap between theoretical CPU scheduling algorithms and real-world process management. This tool allows users to monitor actual system processes in real-time, select any set of running processes, and simulate how various CPU scheduling algorithms would schedule them based on their execution characteristics.
+## Project Concept Overview
+*What Problem Does This Solve?*
+When learning operating systems, students often struggle to connect theoretical scheduling algorithms with real-world process management. They understand the math behind FCFS, SJF, and Round Robin, but have no idea how these concepts apply to actual running programs like Chrome, Python, or system processes.
 
-The application provides a unique educational experience by combining system-level process monitoring with classic scheduling algorithm visualization, making it invaluable for students, educators, and system administrators who want to understand how operating systems manage process execution.
+This project bridges that gap by:
+Monitoring real processes running on your computer
+Simulating scheduling algorithms on those actual processes
+Visualizing execution timelines to see how different algorithms would behave
 
+*The Core Idea*
+Think of this as a "what-if" simulator. You select real processes running on your system (like your browser, code editor, etc.), and the application shows you:
+
+How a First-Come-First-Serve scheduler would execute them
+How Shortest Job First would reorder them for better efficiency
+How Round Robin would share CPU time fairly among them
+The key insight: Real processes become the data for theoretical algorithms, making abstract concepts tangible.
