@@ -165,3 +165,48 @@ class ProcessMonitor:
         if not self.process_list:
             return 0
         return (len(self.process_list) + self.page_size - 1) // self.page_size
+
+
+# ==========================================
+# SCHEDULING ALGORITHMS (With Process IDs)
+# ==========================================
+def assign_process_ids(processes):
+    """Assign sequential IDs to processes for display"""
+    id_mapping = {}
+    for i, (name, data) in enumerate(processes.items(), 1):
+        id_mapping[name] = f"P{i}"
+    return id_mapping
+
+def fcfs(processes):
+    """First Come First Serve"""
+    proc_list = [(name, data['at'], data['bt']) for name, data in processes.items()]
+    proc_list.sort(key=lambda x: x[1])
+    
+    # Assign IDs
+    id_map = assign_process_ids(processes)
+    
+    timeline = []
+    current_time = 0
+    results = {}
+    
+    for name, at, bt in proc_list:
+        if current_time < at:
+            current_time = at
+        start = current_time
+        current_time += bt
+        end = current_time
+        
+        timeline.append((id_map[name], name, start, end))
+        
+        ct = end
+        tat = ct - at
+        wt = tat - bt
+        
+        results[id_map[name]] = {
+            'Process': name.split('(')[0],
+            'PID': name.split('(')[1].rstrip(')') if '(' in name else '',
+            'AT': at, 'BT': bt, 'CT': ct, 'TAT': tat, 'WT': wt
+        }
+    
+    df = pd.DataFrame.from_dict(results, orient='index')
+    return timeline, df, df['TAT'].mean(), df['WT'].mean()
