@@ -309,3 +309,71 @@ def srtf(processes):
     
     df = pd.DataFrame.from_dict(results, orient='index')
     return timeline, df, df['TAT'].mean(), df['WT'].mean()
+
+def round_robin(processes, quantum):
+    """Round Robin"""
+    proc_list = [(name, data['at'], data['bt']) for name, data in processes.items()]
+    
+    id_map = assign_process_ids(processes)
+    
+    remaining_bt = {name: bt for name, at, bt in proc_list}
+    arrival_time = {name: at for name, at, bt in proc_list}
+    completion_time = {}
+    
+    time = 0
+    completed = 0
+    n = len(processes)
+    timeline = []
+    ready_queue = deque()
+    proc_sorted = sorted(proc_list, key=lambda x: x[1])
+    index = 0
+    last_process = None
+    start_time = None
+    
+    while completed < n:
+        while index < n and proc_sorted[index][1] <= time:
+            ready_queue.append(proc_sorted[index][0])
+            index += 1
+        
+        if not ready_queue:
+            time += 1
+            continue
+        
+        current = ready_queue.popleft()
+        
+        if current != last_process:
+            if last_process is not None:
+                timeline.append((id_map[last_process], last_process, start_time, time))
+            last_process = current
+            start_time = time
+        
+        exec_time = min(quantum, remaining_bt[current])
+        time += exec_time
+        remaining_bt[current] -= exec_time
+        
+        while index < n and proc_sorted[index][1] <= time:
+            ready_queue.append(proc_sorted[index][0])
+            index += 1
+        
+        if remaining_bt[current] == 0:
+            completion_time[current] = time
+            timeline.append((id_map[current], current, start_time, time))
+            completed += 1
+            last_process = None
+        else:
+            ready_queue.append(current)
+    
+    results = {}
+    for name, at, bt in proc_list:
+        ct = completion_time[name]
+        tat = ct - at
+        wt = tat - bt
+        
+        results[id_map[name]] = {
+            'Process': name.split('(')[0],
+            'PID': name.split('(')[1].rstrip(')') if '(' in name else '',
+            'AT': at, 'BT': bt, 'CT': ct, 'TAT': tat, 'WT': wt
+        }
+    
+    df = pd.DataFrame.from_dict(results, orient='index')
+    return timeline, df, df['TAT'].mean(), df['WT'].mean()
