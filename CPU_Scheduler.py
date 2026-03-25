@@ -83,3 +83,85 @@ class RoundedButton(tk.Canvas):
         if self.command:
             self.command()
 
+
+# ==========================================
+# ENHANCED PROCESS MONITOR (No Limits)
+# ==========================================
+class ProcessMonitor:
+    def __init__(self):
+        self.selected_processes = {}
+        self.all_processes = {}
+        self.update_queue = queue.Queue()
+        self.is_updating = False
+        self.page_size = 20  # Show 20 processes at a time
+        self.current_page = 0
+        self.process_list = []
+        
+    def get_all_processes(self):
+        """Get all running processes efficiently"""
+        processes = {}
+        try:
+            # Use psutil.process_iter() which is efficient
+            for proc in psutil.process_iter(['pid', 'name', 'memory_percent']):
+                try:
+                    proc_info = proc.info
+                    if proc_info['name'] and proc_info['pid']:
+                        processes[proc_info['pid']] = {
+                            'name': proc_info['name'],
+                            'memory': proc_info['memory_percent'] or 0,
+                            'pid': proc_info['pid']
+                        }
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+        except Exception as e:
+            print(f"Error: {e}")
+        
+        return processes
+    
+    def refresh(self):
+        """Refresh process list in background without blocking"""
+        if self.is_updating:
+            return
+        
+        def update():
+            self.is_updating = True
+            try:
+                processes = self.get_all_processes()
+                self.all_processes = processes
+                # Convert to list for pagination
+                self.process_list = list(processes.items())
+                # Update UI with first page
+                self.update_queue.put(('refresh', self.get_page(0)))
+                self.current_page = 0
+            finally:
+                self.is_updating = False
+        
+        thread = threading.Thread(target=update, daemon=True)
+        thread.start()
+    
+    def get_page(self, page_num):
+        """Get a page of processes"""
+        start = page_num * self.page_size
+        end = start + self.page_size
+        page_items = self.process_list[start:end]
+        return dict(page_items)
+    
+    def next_page(self):
+        """Get next page of processes"""
+        if (self.current_page + 1) * self.page_size < len(self.process_list):
+            self.current_page += 1
+            return self.get_page(self.current_page)
+        return None
+    
+    def prev_page(self):
+        """Get previous page of processes"""
+        if self.current_page > 0:
+            self.current_page -= 1
+            return self.get_page(self.current_page)
+        return None
+    
+    def total_pages(self):
+        """Get total number of pages"""
+        if not self.process_list:
+            return 0
+        return (len(self.process_list) + self.page_size - 1) // self.page_size
