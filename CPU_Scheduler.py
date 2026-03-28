@@ -496,7 +496,27 @@ class CPUSchedulerApp:
                                    bg="white", fg="#6B7280")
         self.count_label.pack(pady=2)
     
-
+    def create_algo_buttons(self):
+        """Create algorithm buttons"""
+        frame = tk.LabelFrame(self.root, text="Scheduling Algorithms",
+                             font=("Segoe UI", 12, "bold"), bg="#F3F4F6", fg="#1F2937")
+        frame.pack(pady=15, padx=30, fill="x")
+        
+        container = tk.Frame(frame, bg="#F3F4F6")
+        container.pack(pady=15)
+        
+        algos = [
+            ("First Come First Serve (FCFS)", "#EF4444", self.run_fcfs),
+            ("Shortest Job First (SJF)", "#8B5CF6", self.run_sjf),
+            ("Shortest Remaining Time First (SRTF)", "#3B82F6", self.run_srtf),
+            ("Round Robin (RR)", "#F59E0B", self.show_rr)
+        ]
+        
+        for i, (name, color, cmd) in enumerate(algos):
+            btn = tk.Button(container, text=name, command=cmd,
+                           bg=color, fg="white", font=("Segoe UI", 11, "bold"),
+                           width=28, height=2, relief="raised", cursor="hand2")
+            btn.grid(row=i//2, column=i%2, padx=15, pady=5)
     
     def process_updates(self):
         """Process queued updates"""
