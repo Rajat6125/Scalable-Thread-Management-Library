@@ -1,17 +1,40 @@
-# CPU Scheduler with Real-Time Process Monitor
-## Project Concept Overview
-*What Problem Does This Solve?*
-When learning operating systems, students often struggle to connect theoretical scheduling algorithms with real-world process management. They understand the math behind FCFS, SJF, and Round Robin, but have no idea how these concepts apply to actual running programs like Chrome, Python, or system processes.
+# Hybrid OS Manager & Scheduler Simulator
+A powerful Operating System simulation and management tool that combines real process control, CPU scheduling visualization, thread synchronization, and API-based external interaction — all in one interactive dashboard.
 
-This project bridges that gap by:
-Monitoring real processes running on your computer
-Simulating scheduling algorithms on those actual processes
-Visualizing execution timelines to see how different algorithms would behave
+## Features
+### 1. Real-Time Process Monitoring
+View all active system processes
+CPU & Memory usage tracking
+Stable paginated process table (no flickering)
+Search and filter by PID or process name
 
-*The Core Idea*
-Think of this as a "what-if" simulator. You select real processes running on your system (like your browser, code editor, etc.), and the application shows you:
+### 2. OS-Level Process Control
+Perform real system operations:
+❌ Kill processes
+⏸ Suspend processes
+▶ Resume processes
+⚙️ Change process priority (Nice values)
 
-How a First-Come-First-Serve scheduler would execute them
-How Shortest Job First would reorder them for better efficiency
-How Round Robin would share CPU time fairly among them
-The key insight: Real processes become the data for theoretical algorithms, making abstract concepts tangible.
+### 3. Live CPU Visualization
+Real-time multi-core CPU usage graph
+Built using matplotlib
+Updates dynamically every second
+
+### 4. Round Robin Scheduler (Live Simulation)
+Select processes and apply Round Robin Scheduling
+Configurable time quantum (default: 2 seconds)
+
+### 5. Synchronization Demo (Multithreading)
+Demonstrates core OS concepts:
+🔐 Mutex (Lock)
+🚦 Semaphore
+🧵 Multiple threads accessing shared resource
+
+✔ Prevents race conditions
+✔ Controls concurrent access
+
+### 6. External API Integration
+Built-in Flask API server
+External programs can interact with OS manager
+Uses real OS processes (not dummy simulation)
+Displays execution using a live Gantt chart
