@@ -21,6 +21,7 @@ class ProcessDashboard(ctk.CTkFrame):
         self.monitor = ProcessMonitor()
         self.sync_mgr = SynchronizationManager()
         self.selected = {}  # Format: {pid: proc_info_dict}
+        self.search_var = ctk.StringVar(value="") # <-- NEW LINE FOR SEARCH
         
         self.setup_graph()
         self.setup_middle_panel()
@@ -67,7 +68,6 @@ class ProcessDashboard(ctk.CTkFrame):
         self.mid_frame = ctk.CTkFrame(self)
         self.mid_frame.pack(fill="both", expand=True, pady=5)
         
-        # Treeview
         columns = ("Select", "PID", "Name", "CPU %", "Mem %", "Nice")
         self.tree = ttk.Treeview(self.mid_frame, columns=columns, show="headings", height=10)
         
@@ -95,10 +95,16 @@ class ProcessDashboard(ctk.CTkFrame):
         self.page_label = ctk.CTkLabel(ctrl_frame, text="Page 1")
         self.page_label.pack(side="left", padx=10)
         ctk.CTkButton(ctrl_frame, text="Next ▶", width=60, command=self.next_page).pack(side="left", padx=5)
-        ctk.CTkButton(ctrl_frame, text="🔄 Refresh List", fg_color="#10B981", width=100, command=self.refresh_processes).pack(side="left", padx=15)
+        ctk.CTkButton(ctrl_frame, text="🔄 Refresh", fg_color="#10B981", width=80, command=self.refresh_processes).pack(side="left", padx=10)
         
-        # Select Random N Feature
-        ctk.CTkLabel(ctrl_frame, text="Select Random:").pack(side="left", padx=(20,5))
+        # --- NEW SEARCH BAR ---
+        self.search_entry = ctk.CTkEntry(ctrl_frame, textvariable=self.search_var, placeholder_text="Search Name/PID...", width=140)
+        self.search_entry.pack(side="left", padx=(10, 0))
+        self.search_entry.bind("<Return>", lambda e: self.refresh_processes()) # Press Enter to search
+        ctk.CTkButton(ctrl_frame, text="🔍", width=30, command=self.refresh_processes).pack(side="left", padx=5)
+        # ----------------------
+        
+        ctk.CTkLabel(ctrl_frame, text="Select Random:").pack(side="left", padx=(15,5))
         self.rand_entry = ctk.CTkEntry(ctrl_frame, width=40)
         self.rand_entry.insert(0, "5")
         self.rand_entry.pack(side="left")
@@ -107,9 +113,25 @@ class ProcessDashboard(ctk.CTkFrame):
         self.selection_label = ctk.CTkLabel(ctrl_frame, text="Selected: 0 processes", text_color="#3B82F6")
         self.selection_label.pack(side="right", padx=10)
 
-    # --- LIST LOGIC ---
+    # --- LIST LOGIC (FIXED REFRESH) ---
     def refresh_processes(self):
         self.monitor.refresh()
+        
+        # --- NEW FILTER LOGIC ---
+        query = self.search_var.get().lower().strip()
+        if query:
+            self.monitor.process_list = [
+                (pid, info) for pid, info in self.monitor.process_list
+                if query in info['name'].lower() or query in str(pid)
+            ]
+        # ------------------------
+        
+        # Purge any selected processes that have died since the last refresh
+        active_pids = self.monitor.all_processes.keys()
+        self.selected = {pid: info for pid, info in self.selected.items() if pid in active_pids}
+        
+        # Reset to page 1 so the user actually sees the UI update
+        self.monitor.current_page = 0 
         self.update_display()
         
     def update_display(self):
@@ -168,7 +190,7 @@ class ProcessDashboard(ctk.CTkFrame):
         except ValueError:
             messagebox.showerror("Error", "Enter a valid integer")
 
-    # --- 3. BOTTOM TABS (Controls & Sim) ---
+    # --- 3. BOTTOM TABS ---
     def setup_tabs(self):
         self.tabview = ctk.CTkTabview(self, height=120)
         self.tabview.pack(fill="x", pady=5)
@@ -177,11 +199,14 @@ class ProcessDashboard(ctk.CTkFrame):
         t2 = self.tabview.add("Simulate Scheduling")
         t3 = self.tabview.add("Sync Demo")
         
-        # Tab 1: OS Control
-        ctk.CTkLabel(t1, text="Batch Actions (Applies to ALL selected checkboxes):").pack(side="left", padx=10)
-        ctk.CTkButton(t1, text="Kill", fg_color="#EF4444", width=80, command=lambda: self.batch_os_action("kill")).pack(side="left", padx=5)
-        ctk.CTkButton(t1, text="Suspend", fg_color="#F59E0B", width=80, command=lambda: self.batch_os_action("suspend")).pack(side="left", padx=5)
-        ctk.CTkButton(t1, text="Resume", fg_color="#10B981", width=80, command=lambda: self.batch_os_action("resume")).pack(side="left", padx=5)
+        # Tab 1: OS Control 
+        ctk.CTkButton(t1, text="Kill", fg_color="#EF4444", width=70, command=lambda: self.batch_os_action("kill")).pack(side="left", padx=5)
+        ctk.CTkButton(t1, text="Suspend", fg_color="#F59E0B", width=70, command=lambda: self.batch_os_action("suspend")).pack(side="left", padx=5)
+        ctk.CTkButton(t1, text="Resume", fg_color="#10B981", width=70, command=lambda: self.batch_os_action("resume")).pack(side="left", padx=5)
+        
+        ctk.CTkButton(t1, text="⚙️ Change Priority", fg_color="#3B82F6", command=self.open_priority_dialog).pack(side="left", padx=15)
+        # UPDATED METHOD NAME HERE
+        ctk.CTkButton(t1, text="📊 Analyze Resources", fg_color="#8B5CF6", command=self.show_resource_analytics).pack(side="left", padx=5)
         
         # Tab 2: Simulation
         ctk.CTkLabel(t2, text="Run Simulation on Selected:").pack(side="left", padx=10)
@@ -193,50 +218,169 @@ class ProcessDashboard(ctk.CTkFrame):
         self.sync_lbl.pack(side="left", padx=20)
         ctk.CTkButton(t3, text="Start Sync Demo", fg_color="#8B5CF6", command=self.run_sync_demo).pack(side="right", padx=10)
 
-    # --- SIMULATION GANTT CHART VISUALIZER ---
+    # --- MODULAR PRIORITY DIALOG ---
+    def open_priority_dialog(self):
+        if not self.selected:
+            messagebox.showwarning("Warning", "Select processes first.")
+            return
+
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Change Priority")
+        dialog.geometry("300x200")
+        dialog.attributes("-topmost", True) 
+
+        ctk.CTkLabel(dialog, text=f"Set Priority for {len(self.selected)} process(es)", font=("Segoe UI", 14, "bold")).pack(pady=20)
+
+        priority_map = {"High Priority (-10)": -10, "Normal (0)": 0, "Low Priority (10)": 10}
+        priority_var = ctk.StringVar(value="Normal (0)")
+
+        dropdown = ctk.CTkOptionMenu(dialog, variable=priority_var, values=list(priority_map.keys()))
+        dropdown.pack(pady=10)
+
+        def apply_priority():
+            val = priority_map[priority_var.get()]
+            self.batch_os_action("nice", nice_value=val)
+            dialog.destroy()
+
+        ctk.CTkButton(dialog, text="Apply Changes", fg_color="#10B981", command=apply_priority).pack(pady=15)
+
+    # --- UPGRADED BAR CHART ANALYTICS ---
+    def show_resource_analytics(self):
+        if not self.selected:
+            messagebox.showwarning("Warning", "Select processes first to analyze.")
+            return
+
+        selected_cpu = sum(info['cpu'] for info in self.selected.values())
+        selected_mem = sum(info['memory'] for info in self.selected.values())
+
+        total_cpu = psutil.cpu_percent()
+        total_mem = psutil.virtual_memory().percent
+
+        other_cpu = max(0, total_cpu - selected_cpu)
+        idle_cpu = max(0, 100 - total_cpu)
+        other_mem = max(0, total_mem - selected_mem)
+        free_mem = max(0, 100 - total_mem)
+
+        win = ctk.CTkToplevel(self)
+        win.title("Resource Analysis (Bar Charts)")
+        win.geometry("800x450")
+        win.attributes("-topmost", True)
+
+        # Create subplots for Bar Charts
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 4), facecolor='#2b2b2b')
+        fig.subplots_adjust(bottom=0.2, wspace=0.3)
+
+        categories = ['Selected', 'Other Apps', 'Idle/Free']
+        colors = ['#FF6B6B', '#4ECDC4', '#4b5563']
+
+        # CPU Bar Chart
+        cpu_vals = [selected_cpu, other_cpu, idle_cpu]
+        ax1.bar(categories, cpu_vals, color=colors)
+        ax1.set_title("CPU Utilization (%)", color="white", pad=10)
+        ax1.set_ylim(0, 100)
+        ax1.tick_params(colors='white')
+        ax1.set_facecolor('#2b2b2b')
+
+        # Memory Bar Chart
+        mem_vals = [selected_mem, other_mem, free_mem]
+        ax2.bar(categories, mem_vals, color=colors)
+        ax2.set_title("Memory Utilization (%)", color="white", pad=10)
+        ax2.set_ylim(0, 100)
+        ax2.tick_params(colors='white')
+        ax2.set_facecolor('#2b2b2b')
+
+        # Add data labels on top of the bars for crisp readability
+        for ax, vals in zip([ax1, ax2], [cpu_vals, mem_vals]):
+            for i, v in enumerate(vals):
+                ax.text(i, v + 2, f"{v:.1f}%", ha='center', color='white', fontweight='bold')
+
+        canvas = FigureCanvasTkAgg(fig, master=win)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=10)
+
+    # --- OS AND SIMULATION EXECUTION ---
+    def batch_os_action(self, action, **kwargs):
+        if not self.selected:
+            messagebox.showwarning("Warning", "Select processes first.")
+            return
+        results = []
+        for pid in list(self.selected.keys()):
+            success, msg = ProcessController.execute_action(pid, action, **kwargs)
+            results.append(msg)
+        messagebox.showinfo("Batch Results", "\n".join(results[:10]) + ("\n..." if len(results) > 10 else ""))
+        self.refresh_processes() 
+
+    def run_sim(self, algo):
+        if not self.selected:
+            messagebox.showwarning("Warning", "Select processes to simulate.")
+            return
+            
+        sim_data = {}
+        for pid, info in self.selected.items():
+            sim_data[f"{info['name']}({pid})"] = {'at': random.randint(0, 5), 'bt': random.randint(2, 8)}
+            
+        if algo == "fcfs":
+            timeline, df, tat, wt = run_fcfs(sim_data)
+        else:
+            timeline, df, tat, wt = run_rr(sim_data, quantum=2)
+            
+        self.show_results(timeline, df, tat, wt, algo.upper())
+
+    # --- DYNAMICALLY SCALED GANTT CHART VISUALIZER ---
     def show_results(self, timeline, df, avg_tat, avg_wt, algo_name):
         win = ctk.CTkToplevel(self)
         win.title(f"Simulation Results - {algo_name}")
         win.geometry("1000x650")
-        win.attributes("-topmost", True)  # Brings the popup to the front
+        win.attributes("-topmost", True)
 
         scroll_frame = ctk.CTkScrollableFrame(win, fg_color="transparent")
         scroll_frame.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # Title
         ctk.CTkLabel(scroll_frame, text=f"{algo_name} Scheduling Results", font=("Impact", 28)).pack(pady=10)
 
-        # Gantt Chart Area
         gantt_frame = ctk.CTkFrame(scroll_frame)
         gantt_frame.pack(fill="x", pady=10, padx=10)
         ctk.CTkLabel(gantt_frame, text="Gantt Chart Timeline", font=("Segoe UI", 16, "bold")).pack(pady=5)
 
-        # We use a standard tkinter canvas here because drawing shapes in customTkinter directly is tricky
-        canvas_gantt = tk.Canvas(gantt_frame, bg="#1e1e1e", height=120, highlightthickness=0)
-        canvas_gantt.pack(fill="x", padx=15, pady=10)
+        # Frame to hold canvas + horizontal scrollbar
+        gantt_container = ctk.CTkFrame(gantt_frame, fg_color="transparent")
+        gantt_container.pack(fill="x", padx=10, pady=5)
 
         max_time = max(end for _, _, _, end in timeline) if timeline else 1
-        width = min(900, max(400, max_time * 35))
-        scale = width / max_time if max_time > 0 else 1
+        
+        # Fixed scale per time unit prevents squishing!
+        scale = 35 
+        total_canvas_width = max(800, max_time * scale + 100)
+
+        canvas_gantt = tk.Canvas(gantt_container, bg="#1e1e1e", height=120, highlightthickness=0, 
+                                 scrollregion=(0, 0, total_canvas_width, 120))
+        
+        h_scroll = ttk.Scrollbar(gantt_container, orient="horizontal", command=canvas_gantt.xview)
+        canvas_gantt.configure(xscrollcommand=h_scroll.set)
+
+        canvas_gantt.pack(side="top", fill="x", expand=True)
+        h_scroll.pack(side="bottom", fill="x")
 
         colors = ['#FF6B6B', '#4ECDC4', '#FFD93D', '#6C5CE7', '#A8E6CF', '#FF8B94', '#A3C4F3']
         x = 50
 
-        # Draw the timeline blocks
         for i, (proc_id, proc_name, start, end) in enumerate(timeline):
             w = (end - start) * scale
             if w > 0:
                 color = colors[i % len(colors)]
                 canvas_gantt.create_rectangle(x, 20, x + w, 70, fill=color, outline="#2b2b2b", width=2)
-                canvas_gantt.create_text(x + w/2, 45, text=proc_id, font=("Segoe UI", 11, "bold"), fill="black")
-                canvas_gantt.create_text(x + w/2, 65, text=f"BT:{end-start}", font=("Segoe UI", 8), fill="black")
+                
+                # Only draw text if the block is wide enough
+                if w > 25:
+                    canvas_gantt.create_text(x + w/2, 45, text=proc_id, font=("Segoe UI", 11, "bold"), fill="black")
+                    canvas_gantt.create_text(x + w/2, 65, text=f"BT:{end-start}", font=("Segoe UI", 8), fill="black")
+                
                 canvas_gantt.create_text(x, 95, text=str(int(start)), font=("Segoe UI", 8), fill="#A1A1AA")
                 x += w
 
         canvas_gantt.create_text(x, 95, text=str(int(max_time)), font=("Segoe UI", 8), fill="#A1A1AA")
-        canvas_gantt.configure(width=x+50)
 
-        # Data Table Area
+        # The Table
         table_frame = ctk.CTkFrame(scroll_frame)
         table_frame.pack(fill="both", expand=True, pady=10, padx=10)
         ctk.CTkLabel(table_frame, text="Process Statistics", font=("Segoe UI", 16, "bold")).pack(pady=5)
@@ -255,42 +399,12 @@ class ProcessDashboard(ctk.CTkFrame):
 
         tree.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # Averages Area
+        # Averages
         avg_frame = ctk.CTkFrame(scroll_frame, fg_color="#1f538d")
         avg_frame.pack(fill="x", pady=10, padx=10)
         
         ctk.CTkLabel(avg_frame, text=f"📊 Average Turnaround Time: {avg_tat:.2f} units", font=("Segoe UI", 14, "bold"), text_color="white").pack(pady=5)
         ctk.CTkLabel(avg_frame, text=f"⏱️ Average Waiting Time: {avg_wt:.2f} units", font=("Segoe UI", 14, "bold"), text_color="white").pack(pady=5)
-
-
-    def batch_os_action(self, action):
-        if not self.selected:
-            messagebox.showwarning("Warning", "Select processes first.")
-            return
-        results = []
-        for pid in list(self.selected.keys()):
-            success, msg = ProcessController.execute_action(pid, action)
-            results.append(msg)
-        messagebox.showinfo("Batch Results", "\n".join(results[:10]) + ("\n..." if len(results) > 10 else ""))
-        self.refresh_processes() 
-
-    def run_sim(self, algo):
-        if not self.selected:
-            messagebox.showwarning("Warning", "Select processes to simulate.")
-            return
-            
-        # Prepare dummy times
-        sim_data = {}
-        for pid, info in self.selected.items():
-            sim_data[f"{info['name']}({pid})"] = {'at': random.randint(0, 5), 'bt': random.randint(2, 8)}
-            
-        if algo == "fcfs":
-            timeline, df, tat, wt = run_fcfs(sim_data)
-        else:
-            timeline, df, tat, wt = run_rr(sim_data, quantum=2)
-            
-        # Call our new visualizer instead of printing to terminal!
-        self.show_results(timeline, df, tat, wt, algo.upper())
 
     def run_sync_demo(self):
         self.sync_lbl.configure(text="Demo Running... Check Terminal/Logs")
