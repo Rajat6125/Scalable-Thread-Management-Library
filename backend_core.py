@@ -74,73 +74,77 @@ class ProcessController:
             return False, f"PID {pid} Error: {str(e)}"
 
 # ==========================================
-# 3. SCHEDULING ALGORITHMS (Simulations)
+# 3. LIVE OS SCHEDULER (Real Process Round-Robin)
 # ==========================================
-def assign_process_ids(processes):
-    return {name: f"P{i}" for i, (name, _) in enumerate(processes.items(), 1)}
+class LiveScheduler:
+    def __init__(self, pids, quantum=2.0):
+        self.pids = deque(pids)
+        self.quantum = quantum
+        self.running = False
+        self.timeline = []  # Stores tuples: (pid, name, start_time_offset, end_time_offset)
+        self.start_time = 0
+        self.lock = threading.Lock()
+        self.thread = None
 
-def run_fcfs(processes):
-    proc_list = [(name, data['at'], data['bt']) for name, data in processes.items()]
-    proc_list.sort(key=lambda x: x[1])
-    id_map = assign_process_ids(processes)
-    
-    timeline, results, current_time = [], {}, 0
-    for name, at, bt in proc_list:
-        if current_time < at: current_time = at
-        start = current_time
-        current_time += bt
-        timeline.append((id_map[name], name, start, current_time))
-        results[id_map[name]] = {'Process': name.split('(')[0], 'PID': name.split('(')[1].rstrip(')'), 
-                                 'AT': at, 'BT': bt, 'CT': current_time, 'TAT': current_time - at, 'WT': (current_time - at) - bt}
-    df = pd.DataFrame.from_dict(results, orient='index')
-    return timeline, df, df['TAT'].mean(), df['WT'].mean()
+    def start(self):
+        if not self.pids: return False
+        self.running = True
+        self.start_time = time.time()
+        self.thread = threading.Thread(target=self._scheduler_loop, daemon=True)
+        self.thread.start()
+        return True
 
-def run_rr(processes, quantum):
-    proc_list = sorted([(name, data['at'], data['bt']) for name, data in processes.items()], key=lambda x: x[1])
-    id_map = assign_process_ids(processes)
-    
-    remaining_bt = {name: bt for name, at, bt in proc_list}
-    completion_time = {}
-    time, completed, n = 0, 0, len(processes)
-    timeline, ready_queue = [], deque()
-    index, last_process, start_time = 0, None, None
-    
-    while completed < n:
-        while index < n and proc_list[index][1] <= time:
-            ready_queue.append(proc_list[index][0])
-            index += 1
-        
-        if not ready_queue:
-            time += 1
-            continue
-            
-        current = ready_queue.popleft()
-        if current != last_process:
-            if last_process is not None: timeline.append((id_map[last_process], last_process, start_time, time))
-            last_process, start_time = current, time
-            
-        exec_time = min(quantum, remaining_bt[current])
-        time += exec_time
-        remaining_bt[current] -= exec_time
-        
-        while index < n and proc_list[index][1] <= time:
-            ready_queue.append(proc_list[index][0])
-            index += 1
-            
-        if remaining_bt[current] == 0:
-            completion_time[current] = time
-            timeline.append((id_map[current], current, start_time, time))
-            completed += 1
-            last_process = None
-        else:
-            ready_queue.append(current)
-            
-    results = {}
-    for name, at, bt in proc_list:
-        results[id_map[name]] = {'Process': name.split('(')[0], 'PID': name.split('(')[1].rstrip(')'), 
-                                 'AT': at, 'BT': bt, 'CT': completion_time[name], 'TAT': completion_time[name] - at, 'WT': (completion_time[name] - at) - bt}
-    df = pd.DataFrame.from_dict(results, orient='index')
-    return timeline, df, df['TAT'].mean(), df['WT'].mean()
+    def stop(self):
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=self.quantum + 1)
+        # Ensure all processes are safely resumed when we stop the scheduler!
+        for pid in list(self.pids):
+            ProcessController.execute_action(pid, "resume")
+
+    def _scheduler_loop(self):
+        # Step 1: Initially suspend all selected processes
+        for pid in list(self.pids):
+            if psutil.pid_exists(pid):
+                ProcessController.execute_action(pid, "suspend")
+
+        while self.running and self.pids:
+            pid = self.pids.popleft()
+
+            # If process was killed externally or died naturally, skip it
+            if not psutil.pid_exists(pid):
+                continue
+
+            try:
+                p = psutil.Process(pid)
+                name = p.name()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
+            # Step 2: Resume the process to give it CPU time
+            ProcessController.execute_action(pid, "resume")
+            start_slice = time.time() - self.start_time
+
+            # Wait for the time quantum (broken into tiny chunks so 'stop' is highly responsive)
+            elapsed = 0
+            while elapsed < self.quantum and self.running:
+                time.sleep(0.1)
+                elapsed += 0.1
+
+            end_slice = time.time() - self.start_time
+
+            # Step 3: Suspend the process again
+            if self.running and psutil.pid_exists(pid):
+                ProcessController.execute_action(pid, "suspend")
+
+            with self.lock:
+                self.timeline.append((pid, name, start_slice, end_slice))
+
+            # Step 4: If process is still alive, push back to queue for next round
+            if self.running and psutil.pid_exists(pid):
+                self.pids.append(pid)
+                
+        self.running = False # Clean exit if queue empties
 
 # ==========================================
 # 4. SYNC DEMO

@@ -8,7 +8,8 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import psutil
 
-from backend_core import ProcessMonitor, ProcessController, run_fcfs, run_rr, SynchronizationManager
+# NOTE: Updated imports to grab the LiveScheduler instead of static simulations
+from backend_core import ProcessMonitor, ProcessController, SynchronizationManager, LiveScheduler
 
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
@@ -21,7 +22,7 @@ class ProcessDashboard(ctk.CTkFrame):
         self.monitor = ProcessMonitor()
         self.sync_mgr = SynchronizationManager()
         self.selected = {}  # Format: {pid: proc_info_dict}
-        self.search_var = ctk.StringVar(value="") # <-- NEW LINE FOR SEARCH
+        self.search_var = ctk.StringVar(value="") 
         
         self.setup_graph()
         self.setup_middle_panel()
@@ -87,7 +88,6 @@ class ProcessDashboard(ctk.CTkFrame):
         self.tree.pack(side="top", fill="both", expand=True, padx=5, pady=5)
         self.tree.bind('<ButtonRelease-1>', self.on_select)
         
-        # Pagination & Random Select Controls
         ctrl_frame = ctk.CTkFrame(self.mid_frame, fg_color="transparent")
         ctrl_frame.pack(fill="x", pady=5)
         
@@ -97,12 +97,10 @@ class ProcessDashboard(ctk.CTkFrame):
         ctk.CTkButton(ctrl_frame, text="Next ▶", width=60, command=self.next_page).pack(side="left", padx=5)
         ctk.CTkButton(ctrl_frame, text="🔄 Refresh", fg_color="#10B981", width=80, command=self.refresh_processes).pack(side="left", padx=10)
         
-        # --- NEW SEARCH BAR ---
         self.search_entry = ctk.CTkEntry(ctrl_frame, textvariable=self.search_var, placeholder_text="Search Name/PID...", width=140)
         self.search_entry.pack(side="left", padx=(10, 0))
-        self.search_entry.bind("<Return>", lambda e: self.refresh_processes()) # Press Enter to search
+        self.search_entry.bind("<Return>", lambda e: self.refresh_processes())
         ctk.CTkButton(ctrl_frame, text="🔍", width=30, command=self.refresh_processes).pack(side="left", padx=5)
-        # ----------------------
         
         ctk.CTkLabel(ctrl_frame, text="Select Random:").pack(side="left", padx=(15,5))
         self.rand_entry = ctk.CTkEntry(ctrl_frame, width=40)
@@ -113,24 +111,19 @@ class ProcessDashboard(ctk.CTkFrame):
         self.selection_label = ctk.CTkLabel(ctrl_frame, text="Selected: 0 processes", text_color="#3B82F6")
         self.selection_label.pack(side="right", padx=10)
 
-    # --- LIST LOGIC (FIXED REFRESH) ---
     def refresh_processes(self):
         self.monitor.refresh()
         
-        # --- NEW FILTER LOGIC ---
         query = self.search_var.get().lower().strip()
         if query:
             self.monitor.process_list = [
                 (pid, info) for pid, info in self.monitor.process_list
                 if query in info['name'].lower() or query in str(pid)
             ]
-        # ------------------------
         
-        # Purge any selected processes that have died since the last refresh
         active_pids = self.monitor.all_processes.keys()
         self.selected = {pid: info for pid, info in self.selected.items() if pid in active_pids}
         
-        # Reset to page 1 so the user actually sees the UI update
         self.monitor.current_page = 0 
         self.update_display()
         
@@ -192,11 +185,11 @@ class ProcessDashboard(ctk.CTkFrame):
 
     # --- 3. BOTTOM TABS ---
     def setup_tabs(self):
-        self.tabview = ctk.CTkTabview(self, height=120)
+        self.tabview = ctk.CTkTabview(self, height=180)
         self.tabview.pack(fill="x", pady=5)
         
         t1 = self.tabview.add("Real OS Controls")
-        t2 = self.tabview.add("Simulate Scheduling")
+        t2 = self.tabview.add("Live OS Scheduler") # <-- UPGRADED TAB
         t3 = self.tabview.add("Sync Demo")
         
         # Tab 1: OS Control 
@@ -205,13 +198,32 @@ class ProcessDashboard(ctk.CTkFrame):
         ctk.CTkButton(t1, text="Resume", fg_color="#10B981", width=70, command=lambda: self.batch_os_action("resume")).pack(side="left", padx=5)
         
         ctk.CTkButton(t1, text="⚙️ Change Priority", fg_color="#3B82F6", command=self.open_priority_dialog).pack(side="left", padx=15)
-        # UPDATED METHOD NAME HERE
         ctk.CTkButton(t1, text="📊 Analyze Resources", fg_color="#8B5CF6", command=self.show_resource_analytics).pack(side="left", padx=5)
         
-        # Tab 2: Simulation
-        ctk.CTkLabel(t2, text="Run Simulation on Selected:").pack(side="left", padx=10)
-        ctk.CTkButton(t2, text="Run FCFS", command=lambda: self.run_sim("fcfs")).pack(side="left", padx=5)
-        ctk.CTkButton(t2, text="Run Round Robin (Q=2)", command=lambda: self.run_sim("rr")).pack(side="left", padx=5)
+        # Tab 2: Live OS Scheduler (Round Robin)
+        ctrl_frame2 = ctk.CTkFrame(t2, fg_color="transparent")
+        ctrl_frame2.pack(fill="x", pady=5)
+        
+        ctk.CTkLabel(ctrl_frame2, text="Live Round-Robin (Q=2s):").pack(side="left", padx=10)
+        self.btn_start_live = ctk.CTkButton(ctrl_frame2, text="▶ Start Scheduling", fg_color="#10B981", width=120, command=self.start_live_scheduler)
+        self.btn_start_live.pack(side="left", padx=5)
+        
+        self.btn_stop_live = ctk.CTkButton(ctrl_frame2, text="⏹ Stop & Resume All", fg_color="#EF4444", width=120, state="disabled", command=self.stop_live_scheduler)
+        self.btn_stop_live.pack(side="left", padx=5)
+
+        # Interactive live-updating Gantt chart container
+        gantt_container = ctk.CTkFrame(t2)
+        gantt_container.pack(fill="both", expand=True, padx=10, pady=5)
+
+        self.live_canvas = tk.Canvas(gantt_container, bg="#1e1e1e", highlightthickness=0, height=80)
+        self.live_scroll = ttk.Scrollbar(gantt_container, orient="horizontal", command=self.live_canvas.xview)
+        self.live_canvas.configure(xscrollcommand=self.live_scroll.set)
+
+        self.live_canvas.pack(side="top", fill="both", expand=True)
+        self.live_scroll.pack(side="bottom", fill="x")
+
+        self.live_scheduler = None
+        self.live_colors = ['#FF6B6B', '#4ECDC4', '#FFD93D', '#6C5CE7', '#A8E6CF', '#FF8B94', '#A3C4F3']
         
         # Tab 3: Sync Demo
         self.sync_lbl = ctk.CTkLabel(t3, text="Ready to run threading demo.", text_color="#A78BFA")
@@ -244,7 +256,6 @@ class ProcessDashboard(ctk.CTkFrame):
 
         ctk.CTkButton(dialog, text="Apply Changes", fg_color="#10B981", command=apply_priority).pack(pady=15)
 
-    # --- UPGRADED BAR CHART ANALYTICS ---
     def show_resource_analytics(self):
         if not self.selected:
             messagebox.showwarning("Warning", "Select processes first to analyze.")
@@ -266,14 +277,12 @@ class ProcessDashboard(ctk.CTkFrame):
         win.geometry("800x450")
         win.attributes("-topmost", True)
 
-        # Create subplots for Bar Charts
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 4), facecolor='#2b2b2b')
         fig.subplots_adjust(bottom=0.2, wspace=0.3)
 
         categories = ['Selected', 'Other Apps', 'Idle/Free']
         colors = ['#FF6B6B', '#4ECDC4', '#4b5563']
 
-        # CPU Bar Chart
         cpu_vals = [selected_cpu, other_cpu, idle_cpu]
         ax1.bar(categories, cpu_vals, color=colors)
         ax1.set_title("CPU Utilization (%)", color="white", pad=10)
@@ -281,7 +290,6 @@ class ProcessDashboard(ctk.CTkFrame):
         ax1.tick_params(colors='white')
         ax1.set_facecolor('#2b2b2b')
 
-        # Memory Bar Chart
         mem_vals = [selected_mem, other_mem, free_mem]
         ax2.bar(categories, mem_vals, color=colors)
         ax2.set_title("Memory Utilization (%)", color="white", pad=10)
@@ -289,7 +297,6 @@ class ProcessDashboard(ctk.CTkFrame):
         ax2.tick_params(colors='white')
         ax2.set_facecolor('#2b2b2b')
 
-        # Add data labels on top of the bars for crisp readability
         for ax, vals in zip([ax1, ax2], [cpu_vals, mem_vals]):
             for i, v in enumerate(vals):
                 ax.text(i, v + 2, f"{v:.1f}%", ha='center', color='white', fontweight='bold')
@@ -298,7 +305,6 @@ class ProcessDashboard(ctk.CTkFrame):
         canvas.draw()
         canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=10)
 
-    # --- OS AND SIMULATION EXECUTION ---
     def batch_os_action(self, action, **kwargs):
         if not self.selected:
             messagebox.showwarning("Warning", "Select processes first.")
@@ -310,102 +316,84 @@ class ProcessDashboard(ctk.CTkFrame):
         messagebox.showinfo("Batch Results", "\n".join(results[:10]) + ("\n..." if len(results) > 10 else ""))
         self.refresh_processes() 
 
-    def run_sim(self, algo):
+    # --- LIVE OS SCHEDULING UI ---
+    def start_live_scheduler(self):
         if not self.selected:
-            messagebox.showwarning("Warning", "Select processes to simulate.")
+            messagebox.showwarning("Warning", "Select processes to schedule first.")
             return
+
+        pids = list(self.selected.keys())
+        self.live_scheduler = LiveScheduler(pids, quantum=2.0)
+        
+        if self.live_scheduler.start():
+            self.btn_start_live.configure(state="disabled")
+            self.btn_stop_live.configure(state="normal")
+            self.live_canvas.delete("all")
+            self.update_live_gantt()
+
+    def stop_live_scheduler(self):
+        if self.live_scheduler:
+            self.live_scheduler.stop()
             
-        sim_data = {}
-        for pid, info in self.selected.items():
-            sim_data[f"{info['name']}({pid})"] = {'at': random.randint(0, 5), 'bt': random.randint(2, 8)}
-            
-        if algo == "fcfs":
-            timeline, df, tat, wt = run_fcfs(sim_data)
+        self.btn_start_live.configure(state="normal")
+        self.btn_stop_live.configure(state="disabled")
+        messagebox.showinfo("Scheduler Stopped", "Scheduler stopped. All managed processes have been resumed.")
+
+    def update_live_gantt(self):
+        if not self.live_scheduler: return
+
+        self.live_canvas.delete("all")
+
+        # Safely pull the timeline from the thread
+        with self.live_scheduler.lock:
+            timeline = list(self.live_scheduler.timeline)
+
+        scale = 35  # Pixels per second
+        max_x = 0
+        y_top = 20
+        y_bottom = 60
+
+        pid_colors = {}
+        color_idx = 0
+
+        # Draw scheduled blocks
+        for pid, name, start, end in timeline:
+            if pid not in pid_colors:
+                pid_colors[pid] = self.live_colors[color_idx % len(self.live_colors)]
+                color_idx += 1
+
+            x1 = start * scale + 10
+            x2 = end * scale + 10
+            max_x = max(max_x, x2)
+
+            color = pid_colors[pid]
+            self.live_canvas.create_rectangle(x1, y_top, x2, y_bottom, fill=color, outline="#2b2b2b", width=2)
+
+            # Draw text label if the block is wide enough
+            if (x2 - x1) > 25:
+                self.live_canvas.create_text((x1 + x2)/2, (y_top + y_bottom)/2, text=f"P:{pid}", fill="black", font=("Segoe UI", 9, "bold"))
+
+        # Draw time markers axis on the bottom
+        max_secs = int(max_x / scale) + 2
+        for s in range(max_secs):
+            tx = s * scale + 10
+            self.live_canvas.create_line(tx, y_bottom, tx, y_bottom + 5, fill="#A1A1AA")
+            self.live_canvas.create_text(tx, y_bottom + 15, text=f"{s}s", fill="#A1A1AA", font=("Segoe UI", 8))
+
+        # Dynamically scale the horizontal scrollbar mapping
+        total_width = max(self.live_canvas.winfo_width(), max_x + 50)
+        self.live_canvas.configure(scrollregion=(0, 0, total_width, 80))
+
+        # Check if we should keep updating or cleanly reset
+        if self.live_scheduler.running:
+            self.live_canvas.xview_moveto(1.0) # Auto-scroll to current execution time
+            self.after(500, self.update_live_gantt) # Poll every 500ms
         else:
-            timeline, df, tat, wt = run_rr(sim_data, quantum=2)
-            
-        self.show_results(timeline, df, tat, wt, algo.upper())
+            # Scheduler drained queue or stopped naturally
+            self.btn_start_live.configure(state="normal")
+            self.btn_stop_live.configure(state="disabled")
 
-    # --- DYNAMICALLY SCALED GANTT CHART VISUALIZER ---
-    def show_results(self, timeline, df, avg_tat, avg_wt, algo_name):
-        win = ctk.CTkToplevel(self)
-        win.title(f"Simulation Results - {algo_name}")
-        win.geometry("1000x650")
-        win.attributes("-topmost", True)
-
-        scroll_frame = ctk.CTkScrollableFrame(win, fg_color="transparent")
-        scroll_frame.pack(fill="both", expand=True, padx=10, pady=10)
-
-        ctk.CTkLabel(scroll_frame, text=f"{algo_name} Scheduling Results", font=("Impact", 28)).pack(pady=10)
-
-        gantt_frame = ctk.CTkFrame(scroll_frame)
-        gantt_frame.pack(fill="x", pady=10, padx=10)
-        ctk.CTkLabel(gantt_frame, text="Gantt Chart Timeline", font=("Segoe UI", 16, "bold")).pack(pady=5)
-
-        # Frame to hold canvas + horizontal scrollbar
-        gantt_container = ctk.CTkFrame(gantt_frame, fg_color="transparent")
-        gantt_container.pack(fill="x", padx=10, pady=5)
-
-        max_time = max(end for _, _, _, end in timeline) if timeline else 1
-        
-        # Fixed scale per time unit prevents squishing!
-        scale = 35 
-        total_canvas_width = max(800, max_time * scale + 100)
-
-        canvas_gantt = tk.Canvas(gantt_container, bg="#1e1e1e", height=120, highlightthickness=0, 
-                                 scrollregion=(0, 0, total_canvas_width, 120))
-        
-        h_scroll = ttk.Scrollbar(gantt_container, orient="horizontal", command=canvas_gantt.xview)
-        canvas_gantt.configure(xscrollcommand=h_scroll.set)
-
-        canvas_gantt.pack(side="top", fill="x", expand=True)
-        h_scroll.pack(side="bottom", fill="x")
-
-        colors = ['#FF6B6B', '#4ECDC4', '#FFD93D', '#6C5CE7', '#A8E6CF', '#FF8B94', '#A3C4F3']
-        x = 50
-
-        for i, (proc_id, proc_name, start, end) in enumerate(timeline):
-            w = (end - start) * scale
-            if w > 0:
-                color = colors[i % len(colors)]
-                canvas_gantt.create_rectangle(x, 20, x + w, 70, fill=color, outline="#2b2b2b", width=2)
-                
-                # Only draw text if the block is wide enough
-                if w > 25:
-                    canvas_gantt.create_text(x + w/2, 45, text=proc_id, font=("Segoe UI", 11, "bold"), fill="black")
-                    canvas_gantt.create_text(x + w/2, 65, text=f"BT:{end-start}", font=("Segoe UI", 8), fill="black")
-                
-                canvas_gantt.create_text(x, 95, text=str(int(start)), font=("Segoe UI", 8), fill="#A1A1AA")
-                x += w
-
-        canvas_gantt.create_text(x, 95, text=str(int(max_time)), font=("Segoe UI", 8), fill="#A1A1AA")
-
-        # The Table
-        table_frame = ctk.CTkFrame(scroll_frame)
-        table_frame.pack(fill="both", expand=True, pady=10, padx=10)
-        ctk.CTkLabel(table_frame, text="Process Statistics", font=("Segoe UI", 16, "bold")).pack(pady=5)
-
-        columns = ['Process', 'PID', 'AT', 'BT', 'CT', 'TAT', 'WT']
-        tree = ttk.Treeview(table_frame, columns=columns, show='headings', height=8)
-        
-        for col in columns:
-            tree.heading(col, text=col)
-            tree.column(col, width=100, anchor='center')
-
-        for proc_id in df.index:
-            row = df.loc[proc_id]
-            values = [row[col] for col in columns]
-            tree.insert('', 'end', values=values)
-
-        tree.pack(fill="both", expand=True, padx=10, pady=10)
-
-        # Averages
-        avg_frame = ctk.CTkFrame(scroll_frame, fg_color="#1f538d")
-        avg_frame.pack(fill="x", pady=10, padx=10)
-        
-        ctk.CTkLabel(avg_frame, text=f"📊 Average Turnaround Time: {avg_tat:.2f} units", font=("Segoe UI", 14, "bold"), text_color="white").pack(pady=5)
-        ctk.CTkLabel(avg_frame, text=f"⏱️ Average Waiting Time: {avg_wt:.2f} units", font=("Segoe UI", 14, "bold"), text_color="white").pack(pady=5)
-
+    # --- SYNC DEMO UI ---
     def run_sync_demo(self):
         self.sync_lbl.configure(text="Demo Running... Check Terminal/Logs")
         self.sync_mgr.start_demo(num_threads=4)
