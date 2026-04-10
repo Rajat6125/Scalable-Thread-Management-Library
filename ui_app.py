@@ -8,8 +8,7 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import psutil
 
-# NOTE: Updated imports to grab the LiveScheduler instead of static simulations
-from backend_core import ProcessMonitor, ProcessController, SynchronizationManager, LiveScheduler
+from backend_core import ProcessMonitor, ProcessController, ContextManager, LiveScheduler
 
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
@@ -20,15 +19,13 @@ class ProcessDashboard(ctk.CTkFrame):
         self.pack(fill="both", expand=True, padx=10, pady=10)
         
         self.monitor = ProcessMonitor()
-        self.sync_mgr = SynchronizationManager()
-        self.selected = {}  # Format: {pid: proc_info_dict}
+        self.selected = {}  
         self.search_var = ctk.StringVar(value="") 
         
         self.setup_graph()
         self.setup_middle_panel()
         self.setup_tabs()
         
-        # Initial fetch
         self.refresh_processes()
 
     # --- 1. LIVE GRAPH ---
@@ -185,12 +182,12 @@ class ProcessDashboard(ctk.CTkFrame):
 
     # --- 3. BOTTOM TABS ---
     def setup_tabs(self):
-        self.tabview = ctk.CTkTabview(self, height=180)
+        self.tabview = ctk.CTkTabview(self, height=220)
         self.tabview.pack(fill="x", pady=5)
         
         t1 = self.tabview.add("Real OS Controls")
-        t2 = self.tabview.add("Live OS Scheduler") # <-- UPGRADED TAB
-        t3 = self.tabview.add("Sync Demo")
+        t2 = self.tabview.add("Live OS Scheduler") 
+        t3 = self.tabview.add("Context Switcher") 
         
         # Tab 1: OS Control 
         ctk.CTkButton(t1, text="Kill", fg_color="#EF4444", width=70, command=lambda: self.batch_os_action("kill")).pack(side="left", padx=5)
@@ -211,7 +208,6 @@ class ProcessDashboard(ctk.CTkFrame):
         self.btn_stop_live = ctk.CTkButton(ctrl_frame2, text="⏹ Stop & Resume All", fg_color="#EF4444", width=120, state="disabled", command=self.stop_live_scheduler)
         self.btn_stop_live.pack(side="left", padx=5)
 
-        # Interactive live-updating Gantt chart container
         gantt_container = ctk.CTkFrame(t2)
         gantt_container.pack(fill="both", expand=True, padx=10, pady=5)
 
@@ -225,10 +221,130 @@ class ProcessDashboard(ctk.CTkFrame):
         self.live_scheduler = None
         self.live_colors = ['#FF6B6B', '#4ECDC4', '#FFD93D', '#6C5CE7', '#A8E6CF', '#FF8B94', '#A3C4F3']
         
-        # Tab 3: Sync Demo
-        self.sync_lbl = ctk.CTkLabel(t3, text="Ready to run threading demo.", text_color="#A78BFA")
-        self.sync_lbl.pack(side="left", padx=20)
-        ctk.CTkButton(t3, text="Start Sync Demo", fg_color="#8B5CF6", command=self.run_sync_demo).pack(side="right", padx=10)
+        
+        
+        # Tab 3: Context Switcher (Dynamic UI with Throttling)
+        top_ctx = ctk.CTkFrame(t3, fg_color="transparent")
+        top_ctx.pack(fill="x", padx=10, pady=5)
+        
+        self.profile_var = ctk.StringVar(value="Gaming Mode")
+        profiles = ContextManager.load_profiles()
+        self.profile_dropdown = ctk.CTkOptionMenu(top_ctx, variable=self.profile_var, values=list(profiles.keys()), command=self.update_profile_view)
+        self.profile_dropdown.pack(side="left", padx=5)
+        
+        ctk.CTkButton(top_ctx, text="➕ Add to Suspend", fg_color="#F59E0B", command=lambda: self.add_to_profile("suspend")).pack(side="left", padx=5)
+        ctk.CTkButton(top_ctx, text="➕ Add to Resume", fg_color="#10B981", command=lambda: self.add_to_profile("resume")).pack(side="left", padx=5)
+        ctk.CTkButton(top_ctx, text="🗑️ Clear Profile", fg_color="#EF4444", command=self.clear_profile).pack(side="right", padx=5)
+        
+        # Checkbox for the aggressive throttling
+        self.throttle_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(t3, text="Aggressive Mode: Auto-Throttle all other background apps to Low Priority", variable=self.throttle_var, text_color="#FCD34D").pack(pady=(0, 5))
+
+        split_frame = ctk.CTkFrame(t3, fg_color="transparent")
+        split_frame.pack(fill="both", expand=True, padx=10, pady=0)
+        
+        left_pane = ctk.CTkFrame(split_frame, fg_color="transparent")
+        left_pane.pack(side="left", fill="both", expand=True, padx=(0,5))
+        
+        self.profile_view = ctk.CTkTextbox(left_pane, height=70, fg_color="#2b2b2b", text_color="white")
+        self.profile_view.pack(fill="both", expand=True)
+        
+        right_pane = ctk.CTkFrame(split_frame, fg_color="transparent")
+        right_pane.pack(side="right", fill="both", expand=True, padx=(5,0))
+        
+        self.context_log = ctk.CTkTextbox(right_pane, height=70, fg_color="#1e1e1e", text_color="#A1A1AA")
+        self.context_log.pack(fill="both", expand=True)
+        
+        # New Execution Controls
+        exec_frame = ctk.CTkFrame(t3, fg_color="transparent")
+        exec_frame.pack(fill="x", pady=5)
+        
+        self.btn_apply_ctx = ctk.CTkButton(exec_frame, text="🚀 START MODE", fg_color="#8B5CF6", hover_color="#7C3AED", command=self.run_context)
+        self.btn_apply_ctx.pack(side="left", expand=True, padx=10)
+
+        self.btn_revert_ctx = ctk.CTkButton(exec_frame, text="🛑 STOP & REVERT", fg_color="#EF4444", hover_color="#B91C1C", state="disabled", command=self.revert_context)
+        self.btn_revert_ctx.pack(side="left", expand=True, padx=10)
+        
+        self.update_profile_view()
+        self.context_log.insert("1.0", "Ready. Apply a profile to see execution logs here.\n")
+
+    # ... [Keep your other methods like open_priority_dialog, show_resource_analytics, etc. exactly the same] ...
+
+    # --- UPDATED DYNAMIC CONTEXT SWITCHER UI METHODS ---
+    def update_profile_view(self, *_):
+        profile_name = self.profile_var.get()
+        profiles = ContextManager.load_profiles()
+        data = profiles.get(profile_name, {"suspend": [], "resume": []})
+        
+        self.profile_view.delete("1.0", "end")
+        self.profile_view.insert("end", f"--- {profile_name} Config ---\n")
+        self.profile_view.insert("end", f"🔴 Will Suspend: {', '.join(data['suspend']) if data['suspend'] else 'None'}\n")
+        self.profile_view.insert("end", f"🟢 Will Resume: {', '.join(data['resume']) if data['resume'] else 'None'}\n")
+
+    def add_to_profile(self, category):
+        if not self.selected:
+            messagebox.showwarning("Warning", "Select processes from the table first!")
+            return
+            
+        profile_name = self.profile_var.get()
+        profiles = ContextManager.load_profiles()
+        
+        if profile_name not in profiles:
+            profiles[profile_name] = {"suspend": [], "resume": []}
+            
+        new_names = set(info['name'].lower() for info in self.selected.values())
+        if category == "suspend":
+            new_names = {name for name in new_names if "python" not in name and "main.py" not in name}
+
+        current_list = set(profiles[profile_name].get(category, []))
+        current_list.update(new_names)
+        
+        profiles[profile_name][category] = list(current_list)
+        ContextManager.save_profiles(profiles)
+        
+        self.update_profile_view()
+        self.selected.clear()
+        self.update_display()
+        
+    def clear_profile(self):
+        profile_name = self.profile_var.get()
+        if messagebox.askyesno("Confirm", f"Are you sure you want to clear all saved apps for {profile_name}?"):
+            profiles = ContextManager.load_profiles()
+            profiles[profile_name] = {"suspend": [], "resume": []}
+            ContextManager.save_profiles(profiles)
+            self.update_profile_view()
+
+    def run_context(self):
+        profile_name = self.profile_var.get()
+        do_throttle = self.throttle_var.get()
+        
+        self.context_log.delete("1.0", "end")
+        self.context_log.insert("end", f"Applying {profile_name}...\n\n")
+        
+        # Passes the checkbox state to the backend
+        logs = ContextManager.apply_profile(profile_name, auto_throttle=do_throttle)
+        self.context_log.insert("end", "\n".join(logs) + "\n")
+        
+        # Toggle buttons
+        self.btn_apply_ctx.configure(state="disabled")
+        self.btn_revert_ctx.configure(state="normal")
+        self.refresh_processes()
+
+    def revert_context(self):
+        self.context_log.delete("1.0", "end")
+        self.context_log.insert("end", "Reverting to normal state...\n\n")
+        
+        logs = ContextManager.revert_context()
+        self.context_log.insert("end", "\n".join(logs) + "\n")
+        
+        # Toggle buttons back
+        self.btn_apply_ctx.configure(state="normal")
+        self.btn_revert_ctx.configure(state="disabled")
+        self.refresh_processes()
+        
+        
+        
+        
 
     # --- MODULAR PRIORITY DIALOG ---
     def open_priority_dialog(self):
@@ -344,11 +460,10 @@ class ProcessDashboard(ctk.CTkFrame):
 
         self.live_canvas.delete("all")
 
-        # Safely pull the timeline from the thread
         with self.live_scheduler.lock:
             timeline = list(self.live_scheduler.timeline)
 
-        scale = 35  # Pixels per second
+        scale = 35  
         max_x = 0
         y_top = 20
         y_bottom = 60
@@ -356,7 +471,6 @@ class ProcessDashboard(ctk.CTkFrame):
         pid_colors = {}
         color_idx = 0
 
-        # Draw scheduled blocks
         for pid, name, start, end in timeline:
             if pid not in pid_colors:
                 pid_colors[pid] = self.live_colors[color_idx % len(self.live_colors)]
@@ -369,40 +483,78 @@ class ProcessDashboard(ctk.CTkFrame):
             color = pid_colors[pid]
             self.live_canvas.create_rectangle(x1, y_top, x2, y_bottom, fill=color, outline="#2b2b2b", width=2)
 
-            # Draw text label if the block is wide enough
             if (x2 - x1) > 25:
                 self.live_canvas.create_text((x1 + x2)/2, (y_top + y_bottom)/2, text=f"P:{pid}", fill="black", font=("Segoe UI", 9, "bold"))
 
-        # Draw time markers axis on the bottom
         max_secs = int(max_x / scale) + 2
         for s in range(max_secs):
             tx = s * scale + 10
             self.live_canvas.create_line(tx, y_bottom, tx, y_bottom + 5, fill="#A1A1AA")
             self.live_canvas.create_text(tx, y_bottom + 15, text=f"{s}s", fill="#A1A1AA", font=("Segoe UI", 8))
 
-        # Dynamically scale the horizontal scrollbar mapping
         total_width = max(self.live_canvas.winfo_width(), max_x + 50)
         self.live_canvas.configure(scrollregion=(0, 0, total_width, 80))
 
-        # Check if we should keep updating or cleanly reset
         if self.live_scheduler.running:
-            self.live_canvas.xview_moveto(1.0) # Auto-scroll to current execution time
-            self.after(500, self.update_live_gantt) # Poll every 500ms
+            self.live_canvas.xview_moveto(1.0) 
+            self.after(500, self.update_live_gantt) 
         else:
-            # Scheduler drained queue or stopped naturally
             self.btn_start_live.configure(state="normal")
             self.btn_stop_live.configure(state="disabled")
 
-    # --- SYNC DEMO UI ---
-    def run_sync_demo(self):
-        self.sync_lbl.configure(text="Demo Running... Check Terminal/Logs")
-        self.sync_mgr.start_demo(num_threads=4)
-        self.monitor_sync_demo()
+    # --- DYNAMIC CONTEXT SWITCHER UI ---
+    def update_profile_view(self, *_):
+        profile_name = self.profile_var.get()
+        profiles = ContextManager.load_profiles()
+        data = profiles.get(profile_name, {"suspend": [], "resume": []})
+        
+        self.profile_view.delete("1.0", "end")
+        self.profile_view.insert("end", f"--- {profile_name} Saved Config ---\n\n")
+        self.profile_view.insert("end", f"🔴 Will Suspend: {', '.join(data['suspend']) if data['suspend'] else 'None'}\n\n")
+        self.profile_view.insert("end", f"🟢 Will Resume: {', '.join(data['resume']) if data['resume'] else 'None'}\n")
 
-    def monitor_sync_demo(self):
-        if self.sync_mgr.logs:
-            self.sync_lbl.configure(text=self.sync_mgr.logs[-1])
-        if any(t.is_alive() for t in self.sync_mgr.active_threads):
-            self.after(200, self.monitor_sync_demo)
-        else:
-            self.sync_lbl.configure(text="Demo Complete.")
+    def add_to_profile(self, category):
+        if not self.selected:
+            messagebox.showwarning("Warning", "Select processes from the table first!")
+            return
+            
+        profile_name = self.profile_var.get()
+        profiles = ContextManager.load_profiles()
+        
+        if profile_name not in profiles:
+            profiles[profile_name] = {"suspend": [], "resume": []}
+            
+        # Get unique process names from selected PIDs
+        new_names = set(info['name'].lower() for info in self.selected.values())
+        
+        # Safeguard: Prevent adding the python runtime to the suspend list (avoids crashing the app)
+        if category == "suspend":
+            new_names = {name for name in new_names if "python" not in name and "main.py" not in name}
+
+        current_list = set(profiles[profile_name].get(category, []))
+        current_list.update(new_names)
+        
+        profiles[profile_name][category] = list(current_list)
+        ContextManager.save_profiles(profiles)
+        
+        self.update_profile_view()
+        # Automatically clear selection so you can pick the next batch
+        self.selected.clear()
+        self.update_display()
+        
+    def clear_profile(self):
+        profile_name = self.profile_var.get()
+        if messagebox.askyesno("Confirm", f"Are you sure you want to clear all saved apps for {profile_name}?"):
+            profiles = ContextManager.load_profiles()
+            profiles[profile_name] = {"suspend": [], "resume": []}
+            ContextManager.save_profiles(profiles)
+            self.update_profile_view()
+
+    def run_context(self):
+        profile_name = self.profile_var.get()
+        self.context_log.delete("1.0", "end")
+        self.context_log.insert("end", f"Applying {profile_name}...\n\n")
+        
+        logs = ContextManager.apply_profile(profile_name)
+        self.context_log.insert("end", "\n".join(logs) + "\n")
+        self.refresh_processes()

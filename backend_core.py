@@ -7,6 +7,7 @@ import queue
 import pandas as pd
 from collections import deque
 import subprocess
+import json # <-- NEW IMPORT
 
 # ==========================================
 # 1. PROCESS MONITOR (Stable, Paginated)
@@ -19,7 +20,6 @@ class ProcessMonitor:
         self.current_page = 0
         
     def refresh(self):
-        """Fetches a static snapshot of processes so they don't jump around."""
         processes = {}
         for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent', 'nice']):
             try:
@@ -36,7 +36,6 @@ class ProcessMonitor:
                 continue
                 
         self.all_processes = processes
-        # Sort alphabetically by name to keep it stable
         self.process_list = sorted(processes.items(), key=lambda x: x[1]['name'].lower())
         self.current_page = 0
 
@@ -81,7 +80,7 @@ class LiveScheduler:
         self.pids = deque(pids)
         self.quantum = quantum
         self.running = False
-        self.timeline = []  # Stores tuples: (pid, name, start_time_offset, end_time_offset)
+        self.timeline = []  
         self.start_time = 0
         self.lock = threading.Lock()
         self.thread = None
@@ -98,12 +97,10 @@ class LiveScheduler:
         self.running = False
         if self.thread:
             self.thread.join(timeout=self.quantum + 1)
-        # Ensure all processes are safely resumed when we stop the scheduler!
         for pid in list(self.pids):
             ProcessController.execute_action(pid, "resume")
 
     def _scheduler_loop(self):
-        # Step 1: Initially suspend all selected processes
         for pid in list(self.pids):
             if psutil.pid_exists(pid):
                 ProcessController.execute_action(pid, "suspend")
@@ -111,7 +108,6 @@ class LiveScheduler:
         while self.running and self.pids:
             pid = self.pids.popleft()
 
-            # If process was killed externally or died naturally, skip it
             if not psutil.pid_exists(pid):
                 continue
 
@@ -121,11 +117,9 @@ class LiveScheduler:
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
 
-            # Step 2: Resume the process to give it CPU time
             ProcessController.execute_action(pid, "resume")
             start_slice = time.time() - self.start_time
 
-            # Wait for the time quantum (broken into tiny chunks so 'stop' is highly responsive)
             elapsed = 0
             while elapsed < self.quantum and self.running:
                 time.sleep(0.1)
@@ -133,50 +127,155 @@ class LiveScheduler:
 
             end_slice = time.time() - self.start_time
 
-            # Step 3: Suspend the process again
             if self.running and psutil.pid_exists(pid):
                 ProcessController.execute_action(pid, "suspend")
 
             with self.lock:
                 self.timeline.append((pid, name, start_slice, end_slice))
 
-            # Step 4: If process is still alive, push back to queue for next round
             if self.running and psutil.pid_exists(pid):
                 self.pids.append(pid)
                 
-        self.running = False # Clean exit if queue empties
+        self.running = False 
 
 # ==========================================
-# 4. SYNC DEMO
+# 4. CONTEXT SWITCHER (Profiles & Reversions)
 # ==========================================
-class SynchronizationManager:
-    def __init__(self):
-        self.shared_resource = 0
-        self.mutex = threading.Lock()
-        self.semaphore = threading.Semaphore(2)
-        self.logs = []
-        self.active_threads = []
+class ContextManager:
+    PROFILE_FILE = "profiles.json"
+    
+    # We use this to remember the OS state before we wrecked it for gaming
+    _active_state = {
+        "suspended_pids": [],
+        "changed_priorities": {}  # Format: {pid: original_nice_value}
+    }
+    _is_active = False
 
-    def log(self, msg):
-        self.logs.append(msg)
-        if len(self.logs) > 10: self.logs.pop(0)
+    @classmethod
+    def load_profiles(cls):
+        if os.path.exists(cls.PROFILE_FILE):
+            try:
+                with open(cls.PROFILE_FILE, "r") as f:
+                    return json.load(f)
+            except json.JSONDecodeError:
+                pass
+        default_profiles = {
+            "Gaming Mode": {"suspend": [], "resume": []},
+            "Focus Mode": {"suspend": [], "resume": []},
+            "Relax Mode": {"suspend": [], "resume": []}
+        }
+        cls.save_profiles(default_profiles)
+        return default_profiles
 
-    def worker_task(self, thread_id):
-        self.log(f"T{thread_id} waiting for Semaphore...")
-        with self.semaphore:
-            self.log(f"T{thread_id} working (Simulated I/O)...")
-            time.sleep(random.uniform(0.5, 1.5))
-            with self.mutex:
-                local_copy = self.shared_resource
-                local_copy += 1
-                time.sleep(0.1)
-                self.shared_resource = local_copy
-                self.log(f"T{thread_id} updated resource to {self.shared_resource}")
+    @classmethod
+    def save_profiles(cls, profiles_data):
+        with open(cls.PROFILE_FILE, "w") as f:
+            json.dump(profiles_data, f, indent=4)
 
-    def start_demo(self, num_threads=5):
-        self.shared_resource = 0
-        self.logs.clear()
-        for i in range(num_threads):
-            t = threading.Thread(target=self.worker_task, args=(i,))
-            self.active_threads.append(t)
-            t.start()
+    @classmethod
+    def apply_profile(cls, profile_name, auto_throttle=False):
+        # If a mode is already running, revert it first so we don't permanently lose our old settings!
+        if cls._is_active:
+            cls.revert_context()
+
+        profiles = cls.load_profiles()
+        if profile_name not in profiles:
+            return ["Error: Profile not found."]
+
+        profile = profiles[profile_name]
+        to_suspend = profile.get("suspend", [])
+        to_resume = profile.get("resume", [])
+
+        logs = []
+        cls._active_state["suspended_pids"].clear()
+        cls._active_state["changed_priorities"].clear()
+
+        my_pid = os.getpid() # Don't accidentally throttle our own app
+
+        for proc in psutil.process_iter(['pid', 'name', 'nice']):
+            try:
+                p_name = proc.info['name'].lower()
+                pid = proc.info['pid']
+                nice_val = proc.info['nice']
+
+                if pid == my_pid or pid == 0:
+                    continue 
+
+                # 1. Check for Explicit Suspend
+                if any(target.lower() == p_name for target in to_suspend):
+                    proc.suspend()
+                    cls._active_state["suspended_pids"].append(pid)
+                    logs.append(f"⏸ Suspended: {proc.info['name']} (PID: {pid})")
+                
+                # 2. Check for Explicit Resume
+                elif any(target.lower() == p_name for target in to_resume):
+                    proc.resume()
+                    logs.append(f"▶ Resumed: {proc.info['name']} (PID: {pid})")
+                    
+                # 3. MASS THROTTLE: If it wasn't suspended/resumed, and auto_throttle is ON
+                elif auto_throttle and nice_val is not None:
+                    # Windows uses specific constants for normal/low priority
+                    if os.name == 'nt':
+                        is_normal_or_lower = nice_val in [psutil.NORMAL_PRIORITY_CLASS, psutil.BELOW_NORMAL_PRIORITY_CLASS]
+                        target_low_priority = psutil.IDLE_PRIORITY_CLASS 
+                    # Mac/Linux uses 0 (normal) to 20 (lowest)
+                    else:
+                        is_normal_or_lower = nice_val >= 0
+                        target_low_priority = 15 
+
+                    # If it's a normal task, drop its priority to the absolute floor
+                    if is_normal_or_lower:
+                        cls._active_state["changed_priorities"][pid] = nice_val
+                        proc.nice(target_low_priority)
+
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                # AccessDenied naturally protects us from throttling critical Windows/System processes!
+                continue
+                
+        if auto_throttle:
+            logs.insert(0, f"📉 MASS THROTTLE: Reduced CPU priority of {len(cls._active_state['changed_priorities'])} background apps!")
+
+        if not logs:
+            logs.append("No actions taken. Ensure you have apps added to the profile.")
+            
+        cls._is_active = True
+        return logs
+
+    @classmethod
+    def revert_context(cls):
+        if not cls._is_active:
+            return ["⚠️ No active mode to revert."]
+
+        logs = []
+        resumed_count = 0
+        restored_count = 0
+
+        # 1. Wake up the suspended apps
+        for pid in cls._active_state["suspended_pids"]:
+            try:
+                psutil.Process(pid).resume()
+                resumed_count += 1
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        
+        # 2. Restore the original priorities of the throttled apps
+        for pid, orig_nice in cls._active_state["changed_priorities"].items():
+            try:
+                psutil.Process(pid).nice(orig_nice)
+                restored_count += 1
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+
+        if resumed_count > 0:
+            logs.append(f"▶ Woke up {resumed_count} suspended apps.")
+        if restored_count > 0:
+            logs.append(f"⚙️ Restored original CPU priority for {restored_count} background apps.")
+
+        cls._active_state["suspended_pids"].clear()
+        cls._active_state["changed_priorities"].clear()
+        cls._is_active = False
+
+        if not logs:
+            logs.append("Reverted, but all affected processes had already closed naturally.")
+
+        return logs
