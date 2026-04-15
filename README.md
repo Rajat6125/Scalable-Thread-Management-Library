@@ -81,20 +81,19 @@ Follow these exact steps to replicate the environment and run the application on
 > You actually don't need to setup anything else except for the ones provided in setup.html , make sure you type the code written in yellow in the terminal and name the directory as process_manager to make it work , the virtual environment should also be named as myvenv and the folder should be saved on Home in ubuntu . 
 
 Update system packages:
-
 ```Bash
 sudo apt update
-Install required system dependencies:
 ```
+Install required system dependencies:
 ```Bash
 sudo apt install python3-tk python3-venv
-Create and activate a virtual environment:
 ```
+Create and activate a virtual environment:
 ```Bash
 python3 -m venv myvenv
 source myvenv/bin/activate
-Install Python dependencies:
 ```
+Install Python dependencies:
 ```Bash
 pip install -r requirements.txt
 ```
