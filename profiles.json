@@ -1,0 +1,20 @@
+{
+    "Gaming Mode": {
+        "suspend": [],
+        "terminate": [],
+        "start": [],
+        "priority": {}
+    },
+    "Focus Mode": {
+        "suspend": [],
+        "terminate": [],
+        "start": [],
+        "priority": {}
+    },
+    "Relax Mode": {
+        "suspend": [],
+        "terminate": [],
+        "start": [],
+        "priority": {}
+    }
+}
