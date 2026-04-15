@@ -1,0 +1,8 @@
+[Desktop Entry]
+Version=1.0
+Name= Game_with_usage
+Exec=bash -c "cd ~/Desktop/zatcd-linux && mangohud ./ZatCD.x86_64"
+Icon=applications-other
+Terminal=true
+Type=Application
+Categories=Utility;System;

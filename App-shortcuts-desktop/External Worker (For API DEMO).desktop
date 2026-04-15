@@ -1,0 +1,8 @@
+[Desktop Entry]
+Version=1.0
+Name=External Worker (For API DEMO)
+Exec=bash -c "cd ~/process_manager && ./myvenv/bin/python helper-processes/external_worker.py; exec bash"
+Icon=utilities-terminal
+Terminal=true
+Type=Application
+Categories=Utility;System;

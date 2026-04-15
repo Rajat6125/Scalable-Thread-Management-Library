@@ -1,0 +1,8 @@
+[Desktop Entry]
+Version=1.0
+Name= Heavy Process (For OS Guard or Context_Switcher)
+Exec=bash -c "cd ~/process_manager && ./myvenv/bin/python helper-processes/heavy_process.py; exec bash"
+Icon=utilities-terminal
+Terminal=true
+Type=Application
+Categories=Utility;System;

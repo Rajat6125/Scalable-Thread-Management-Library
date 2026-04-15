@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Name=Process Manager (Admin)
+Comment=Launch OS Manager with elevated privileges
+Exec=bash -c "cd ~/process_manager && sudo ./myvenv/bin/python main-code/main.py"
+Icon=preferences-system
+Terminal=true
+Type=Application
+Categories=Utility;System;

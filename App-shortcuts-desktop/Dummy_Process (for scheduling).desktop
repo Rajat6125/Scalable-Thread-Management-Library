@@ -1,0 +1,8 @@
+[Desktop Entry]
+Version=1.0
+Name= Dummy_Process (for scheduling)
+Exec=bash -c "cd ~/process_manager && ./myvenv/bin/python helper-processes/dummy_process.py"
+Icon=utilities-terminal
+Terminal=true
+Type=Application
+Categories=Utility;System;
