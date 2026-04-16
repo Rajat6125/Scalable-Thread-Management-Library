@@ -1,4 +1,4 @@
-# Hybrid OS Manager & Simulator
+# Real-Time Process Monitoring / Managing Dashboard
 
 A comprehensive, Python-based task manager and Operating System concept simulator designed specifically for Linux (Ubuntu).
 
